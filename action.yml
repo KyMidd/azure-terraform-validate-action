@@ -1,4 +1,4 @@
-name: Terraform Validate
+name: Kyler's Terraform Validate
 description: Terraform Validation without staging files for apply
 inputs:
   SSH_KEY: 
