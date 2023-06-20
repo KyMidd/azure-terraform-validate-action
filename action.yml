@@ -1,0 +1,208 @@
+name: Terraform Validate
+description: Terraform Validation without staging files for apply
+inputs:
+  SSH_KEY: 
+    description: SSH Key for git clone
+    required: true
+  location:
+    description: Targeted location/environment
+    required: true
+  solution_name:
+    description: Name of the solution
+    required: true
+  terraform_version:
+    description: Version of Terraform to use
+    required: true
+    default: 1.4.5
+  az_tenant_id:
+    description: Azure Tenant ID
+    required: true
+  az_client_id:
+    description: Azure Client ID
+    required: true
+  az_subscription_id:
+    description: Azure Subscription ID
+    required: true
+  tf_storage_resource_group_name:
+    description: Name of the resource group containing the storage account
+    required: true
+  tf_storage_account_name:
+    description: Name of the storage account
+    required: true
+  tf_storage_container_name:
+    description: Name of the storage container
+    required: true
+  tf_state_filename:
+    description: Optional - Name of the state file (without .tfstate post-fix), defaults to solution name if not set
+    required: false
+  tf_plan_vars:
+    description: Optional - Additional variables to pass to the plan command
+    required: false
+  
+runs:
+  using: "composite"
+  steps:
+    - name: Export Azure Vars
+      shell: bash
+      run: |
+        echo ""
+        echo "########################"
+        echo "## Export Azure Vars"
+        echo "########################"
+        echo ""
+        
+        # Set ARM values
+        ARM_TENANT_ID=${{ inputs.az_tenant_id }}
+        ARM_SUBSCRIPTION_ID=${{ inputs.az_subscription_id }}
+        ARM_CLIENT_ID=${{ inputs.az_client_id }}
+        
+        # Export ARM values
+        echo "ARM_TENANT_ID=$ARM_TENANT_ID" | tee -a $GITHUB_ENV
+        echo "ARM_SUBSCRIPTION_ID=$ARM_SUBSCRIPTION_ID" | tee -a $GITHUB_ENV
+        echo "ARM_CLIENT_ID=$ARM_CLIENT_ID" | tee -a $GITHUB_ENV
+    
+    - name: Prep SSH Key
+      shell: bash
+      id: prep_ssh_key
+      run: |
+        echo ""
+        echo "########################"
+        echo "## Prep SSH Key"
+        echo "########################"
+        echo ""
+        
+        mkdir -p ~/.ssh
+        echo "${{ inputs.SSH_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        touch ~/.ssh/known_hosts
+        o=`ssh-keygen -F github.com || ssh-keyscan github.com >> ~/.ssh/known_hosts`
+        git config --global url."git@github.com:".insteadOf "https://github.com/"
+    
+    - name: Banner for Install Terraform
+      shell: bash
+      run: |
+        echo ""
+        echo "########################"
+        echo "## Install Terraform"
+        echo "########################"
+        echo ""
+        
+    - name: Install Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: ${{ inputs.terraform_version }}
+
+    - name: Banner for Azure Login
+      shell: bash
+      run: |
+        echo ""
+        echo "########################"
+        echo "## Azure Login"
+        echo "########################"
+        echo ""
+        
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        tenant-id: ${{ inputs.az_tenant_id }}
+        client-id: ${{ inputs.az_client_id }}
+        subscription-id: ${{ inputs.az_subscription_id }}
+    
+    - name: Validate Storage Container Exists
+      shell: bash
+      continue-on-error: true
+      id: validate_storage_container
+      run: |
+        echo ""
+        echo "########################"
+        echo "## Validate Storage Container Exists"
+        echo "########################"
+        echo ""
+        
+        echo "Checking if store container ${{ inputs.tf_storage_container_name }} exists in storage account ${{ inputs.tf_storage_account_name }}"
+        STORAGE_CONTAINER_EXIST=$(az storage container exists --name $tf_storage_container_name --account-name ${{ inputs.tf_storage_account_name }} --subscription ${{ inputs.az_subscription_id }} --auth-mode login | jq -r '.exists')
+
+        # If the storage container does not exist, create it
+        if [ "$STORAGE_CONTAINER_EXIST" = "false" ]; then
+          echo "Creating storage container..."
+          az storage container create --name ${{ inputs.tf_storage_container_name }} --account-name ${{ inputs.tf_storage_account_name }} --subscription ${{ inputs.az_subscription_id }} --auth-mode login
+          echo "Sleeping for 5 seconds to permit Azure to catch up"
+          sleep 5
+        else
+          echo "Storage container already exists, continuing"
+        fi
+          
+    - name: Terraform Init
+      shell: bash
+      id: init
+      run: |
+        echo ""
+        echo "########################"
+        echo "## Terraform Init"
+        echo "########################"
+        echo ""
+        
+        # If the state file name is not set, use the solution name
+        if [ -z "$tf_state_filename" ]; then
+          echo "State file name not set, using solution name"
+          tf_state_filename=${{ inputs.solution_name }}
+        else
+          echo "State file name set, using $tf_state_filename"
+          tf_state_filename=${{ inputs.tf_state_filename }}
+        fi
+        
+        # Terraform init
+        terraform init \
+          -input=false \
+          -backend-config="resource_group_name=${{ inputs.tf_storage_resource_group_name }}" \
+          -backend-config="storage_account_name=${{ inputs.tf_storage_account_name }}" \
+          -backend-config="container_name=${{ inputs.tf_storage_container_name }}" \
+          -backend-config="key=${tf_state_filename}.tfstate"
+
+    - name: Terraform Validate
+      shell: bash
+      id: validate
+      run: |
+        echo ""
+        echo "########################"
+        echo "## Terraform Validate"
+        echo "########################"
+        echo ""
+        
+        terraform validate
+    
+    - name: Terraform Format Check
+      shell: bash
+      id: fmt
+      run: |
+        echo ""
+        echo "########################"
+        echo "## Terraform Format Check"
+        echo "########################"
+        echo ""
+        
+        terraform fmt --recursive -check
+
+    - name: Terraform Plan
+      shell: bash
+      id: plan
+      run: |
+        echo ""
+        echo "########################"
+        echo "## Terraform Plan"
+        echo "########################"
+        echo ""
+        
+        # Test if extra TF Vars have been sent, if yes, use them, else default plan
+        if [[ -z "${{ inputs.tf_plan_vars }}" ]]; then
+          echo "No extra tf_plan_vars specified, planning with defaults"
+          terraform plan \
+            -input=false \
+            -var-file="data/${{ inputs.solution_name }}.tfvars"
+        else
+          echo "Extra tf_plan_vars specified, using them" 
+          terraform plan \
+          -input=false \
+          -var-file="data/${{ inputs.solution_name }}.tfvars" \
+          ${{ inputs.tf_plan_vars }}
+        fi
