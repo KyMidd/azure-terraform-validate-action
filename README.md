@@ -28,6 +28,9 @@ If you need to pass additional terraform command, you can encode them like this:
     # Write value to GitHub Action env
     echo "tf_plan_vars=$tf_plan_vars" | tee -a $GITHUB_ENV
 
+    # Mask values
+    echo "::add-mask::$tf_plan_vars"
+
 # Call the Action as a step in your workflow
 - name: Terraform Validate
   uses: kymidd/azure-terraform-validate-action@master
