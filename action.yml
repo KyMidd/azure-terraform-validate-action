@@ -38,6 +38,10 @@ inputs:
   tf_plan_vars:
     description: Optional - Additional variables to pass to the plan command
     required: false
+  drift_slack_webhook_url:
+    description: Slack webhook URL for posting drift detection messages
+    required: true
+    default: www.google.com
   
 runs:
   using: "composite"
@@ -198,11 +202,51 @@ runs:
           echo "No extra tf_plan_vars specified, planning with defaults"
           terraform plan \
             -input=false \
-            -var-file="data/${{ inputs.solution_name }}.tfvars"
+            -var-file="data/${{ inputs.solution_name }}.tfvars" \
+            -out=tf.plan
         else
           echo "Extra tf_plan_vars specified, using them" 
           terraform plan \
           -input=false \
           -var-file="data/${{ inputs.solution_name }}.tfvars" \
-          ${{ inputs.tf_plan_vars }}
+          ${{ inputs.tf_plan_vars }} \
+          -out=tf.plan
+        fi
+
+    - name: Terraform Drift Detection
+      id: tf-drift-detection
+      # If we're a scheduled run, we're in drift detection mode. Check for drift and post to slack if detected
+      if: github.event_name == 'schedule'
+      shell: bash
+      run: |
+        echo ""
+        echo "########################"
+        echo "## Terraform Drift Detection"
+        echo "########################"
+        echo ""
+        
+        # Read the tf.plan file, filter for change line
+        TERRAFORM_PLAN_OUTPUT=$(terraform show -no-color tf.plan | grep -E 'Your infrastructure matches the configuration|Terraform will perform the following actions' || echo "error")
+
+        # Test if read successfully
+        if [[ "$TERRAFORM_PLAN_OUTPUT" == "error" ]]; then
+          echo "There was an issue with reading the terraform plan file, continuing to be safe"
+        else
+          echo "Terraform plan output file retrieved successfully, checking for changes"
+        fi
+
+        if [[ "$TERRAFORM_PLAN_OUTPUT" =~ "infrastructure matches the configuration" ]]; then
+          echo "There are no changes for terraform to apply."
+        elif [[ "$TERRAFORM_PLAN_OUTPUT" =~ "will perform the following actions" ]]; then
+          echo "Drift has been detected, posting notification to Slack room"
+          
+          # Set vars
+          REPO_URL=${{ github.server_url }}/${{ github.repository }}
+          ACTION_RUN_URL=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          
+          # Send drift detection post to slack
+          curl -sX POST --data-urlencode "payload={\"text\": \"Drift has been detected in <$REPO_URL|${{ github.event.repository.name }}> in env <${ACTION_RUN_URL}|${{ inputs.solution_name }}>.\"}" ${{ inputs.drift_slack_webhook_url }}
+        else
+          echo "There was an error detecting if there were changes"
+          echo "We should investigate what's wrong, or try re-running this workflow"
         fi

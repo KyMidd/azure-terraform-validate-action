@@ -1,6 +1,8 @@
 # azure-terraform-validate-action
 
-A reusable GitHub Action for validating Terraform files in a GitHub repository. Can be called like this: 
+A reusable GitHub Action for validating Terraform files in a GitHub repository. Supports both being called from a Pull Request context to generate a terraform plan, as well as in "drift detection" mode by a cron schedule, and will post to a slack webhook room that drift has been detected. 
+
+Can be called like this: 
 ```yaml
 - name: Terraform Validate
   uses: kymidd/azure-terraform-validate-action@master
@@ -16,6 +18,7 @@ A reusable GitHub Action for validating Terraform files in a GitHub repository. 
     tf_storage_account_name: ${{ env.tf_storage_account_name }}
     tf_storage_container_name: ${{ env.tf_storage_container_name }}
     tf_state_filename: ${{ env.tf_state_filename }}
+    drift_slack_webhook_url: "https://hooks.slack.com/services/xxxxx/yyyyy"
 ```
 
 If you need to pass additional terraform command, you can encode them like this: 
@@ -47,4 +50,5 @@ If you need to pass additional terraform command, you can encode them like this:
     tf_storage_container_name: ${{ env.tf_storage_container_name }}
     tf_state_filename: ${{ env.tf_state_filename }}
     tf_plan_vars: ${{ env.tf_plan_vars }}
+    drift_slack_webhook_url: "https://hooks.slack.com/services/xxxxx/yyyyy"
 ```
